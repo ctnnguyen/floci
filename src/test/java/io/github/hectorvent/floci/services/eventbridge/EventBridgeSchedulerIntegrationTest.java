@@ -286,6 +286,14 @@ class EventBridgeSchedulerIntegrationTest {
             public AuthConfig auth() { return null; }
             @Override
             public ServicesConfig services() { return null; }
+            @Override
+            public String ecrBaseUri() { return ""; }
+            @Override
+            public int maxRequestSize() { return 512; }
+            @Override
+            public java.util.Optional<String> hostname() { return java.util.Optional.empty(); }
+            @Override
+            public EmulatorConfig.InitHooksConfig initHooks() { return null; }
         };
     }
 }
