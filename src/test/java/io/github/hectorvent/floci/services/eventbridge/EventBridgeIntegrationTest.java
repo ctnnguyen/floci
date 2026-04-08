@@ -30,7 +30,7 @@ class EventBridgeIntegrationTest {
         sinkQueueUrl = given()
                 .contentType(SQS_CONTENT_TYPE)
                 .header("X-Amz-Target", "AmazonSQS.CreateQueue")
-                .body("{\"QueueName\":\"integration-test-queue\"}")
+                .body("{\"QueueName\":\"eb-integration-sink-queue\"}")
                 .when()
                 .post("/")
                 .then()
@@ -44,7 +44,7 @@ class EventBridgeIntegrationTest {
         transformerQueueUrl = given()
                 .contentType(SQS_CONTENT_TYPE)
                 .header("X-Amz-Target", "AmazonSQS.CreateQueue")
-                .body("{\"QueueName\":\"transformer-test-queue\"}")
+                .body("{\"QueueName\":\"eb-integration-xform-queue\"}")
                 .when()
                 .post("/")
                 .then()
@@ -58,7 +58,7 @@ class EventBridgeIntegrationTest {
         given()
                 .contentType(EVENT_BRIDGE_CONTENT_TYPE)
                 .header("X-Amz-Target", "AWSEvents.PutRule")
-                .body("{\"Name\":\"integration-test-rule\"}")
+                .body("{\"Name\":\"eb-integration-test-rule\",\"EventPattern\":\"{\\\"source\\\":[\\\"com.mycompany.myapp\\\"]}\"}")
                 .when().post("/")
                 .then().statusCode(200);
 
@@ -67,7 +67,7 @@ class EventBridgeIntegrationTest {
                 .header("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
                 .body("{\"QueueUrl\":\"" + sinkQueueUrl + "\",\"AttributeNames\":[\"All\"]}")
                 .when()
-                .post("/0000000000/integration-test-queue")
+                .post("/0000000000/eb-integration-sink-queue")
                 .then()
                 .statusCode(200)
                 .extract().jsonPath().getString("Attributes.QueueArn");
@@ -75,7 +75,7 @@ class EventBridgeIntegrationTest {
         given()
                 .contentType(EVENT_BRIDGE_CONTENT_TYPE)
                 .header("X-Amz-Target", "AWSEvents.PutTargets")
-                .body("{\"Rule\":\"integration-test-rule\",\"Targets\":[{\"Id\":\"1\",\"Arn\":\"" + queueArn + "\"}]}")
+                .body("{\"Rule\":\"eb-integration-test-rule\",\"Targets\":[{\"Id\":\"1\",\"Arn\":\"" + queueArn + "\"}]}")
                 .when().post("/")
                 .then().statusCode(200);
     }
@@ -88,7 +88,7 @@ class EventBridgeIntegrationTest {
                 .header("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
                 .body("{\"QueueUrl\":\"" + transformerQueueUrl + "\",\"AttributeNames\":[\"All\"]}")
                 .when()
-                .post("/0000000000/transformer-test-queue")
+                .post("/0000000000/eb-integration-xform-queue")
                 .then()
                 .statusCode(200)
                 .extract().jsonPath().getString("Attributes.QueueArn");
@@ -98,7 +98,7 @@ class EventBridgeIntegrationTest {
                 .header("X-Amz-Target", "AWSEvents.PutTargets")
                 .body("""
                 {
-                  "Rule": "integration-test-rule",
+                  "Rule": "eb-integration-test-rule",
                   "Targets": [{
                     "Id": "2",
                     "Arn": "%s",
@@ -138,7 +138,7 @@ class EventBridgeIntegrationTest {
                 .then().statusCode(200);
 
         String expectedMessage = "\\{\"version\":\"0\",\"id\":\"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\",\"source\":\"com.mycompany.myapp\"," +
-                "\"detail-type\":\"myDetailType\",\"account\":\"000000000000\",\"time\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]{9}Z\"," +
+                "\"detail-type\":\"myDetailType\",\"account\":\"000000000000\",\"time\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]+Z\"," +
                 "\"region\":\"us-east-1\",\"resources\":\\[\"resource1\",\"resource2\"],\"detail\":\\{\"key1\":\"value1\",\"key2\":\"value2\"},\"event-bus-name\":\"default\"}";
 
         given()
@@ -146,7 +146,7 @@ class EventBridgeIntegrationTest {
             .header("X-Amz-Target", "AmazonSQS.ReceiveMessage")
             .body("{\"QueueUrl\":\"" + sinkQueueUrl + "\",\"MaxNumberOfMessages\":1}")
             .when()
-                .post("/0000000000/integration-test-queue")
+                .post("/0000000000/eb-integration-sink-queue")
             .then()
                 .statusCode(200)
                 .body("Messages", hasSize(1))
@@ -162,7 +162,7 @@ class EventBridgeIntegrationTest {
                 .header("X-Amz-Target", "AmazonSQS.ReceiveMessage")
                 .body("{\"QueueUrl\":\"" + transformerQueueUrl + "\",\"MaxNumberOfMessages\":10}")
                 .when()
-                .post("/0000000000/transformer-test-queue");
+                .post("/0000000000/eb-integration-xform-queue");
 
         given()
                 .contentType(EVENT_BRIDGE_CONTENT_TYPE)
@@ -184,7 +184,7 @@ class EventBridgeIntegrationTest {
                 .header("X-Amz-Target", "AmazonSQS.ReceiveMessage")
                 .body("{\"QueueUrl\":\"" + transformerQueueUrl + "\",\"MaxNumberOfMessages\":1}")
                 .when()
-                .post("/0000000000/transformer-test-queue")
+                .post("/0000000000/eb-integration-xform-queue")
                 .then()
                 .statusCode(200)
                 .body("Messages", hasSize(1))
