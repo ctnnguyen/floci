@@ -1,3 +1,11 @@
+## [1.5.1](https://github.com/floci-io/floci/compare/1.5.0...1.5.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* merge branch 'main' into release/1.x ([b2075be](https://github.com/floci-io/floci/commit/b2075be55cc3955db03f6b6df5ee7f7f633eb5ef))
+* native image build failure due to SecureRandom in CognitoSrpHelper ([e83f6d6](https://github.com/floci-io/floci/commit/e83f6d6cbd0fe8e348e228b18ef2163ab8a80271))
+
 # [1.5.0](https://github.com/floci-io/floci/compare/1.4.0...1.5.0) (2026-04-09)
 
 
