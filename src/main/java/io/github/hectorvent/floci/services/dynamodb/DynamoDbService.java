@@ -904,6 +904,8 @@ public class DynamoDbService {
                                    JsonNode exprAttrNames, JsonNode exprAttrValues) {
         // Parse comma-separated assignments: "attr = :val, #name = :val2"
         // Stop when we hit another clause keyword (REMOVE, ADD, DELETE) or end
+        LOG.debugv("applySetClause: clause={0}, exprAttrNames={1}, exprAttrValues={2}",
+                   clause, exprAttrNames, exprAttrValues);
         while (!clause.isEmpty()) {
             String upper = clause.toUpperCase();
             if (upper.startsWith("REMOVE ") || upper.startsWith("ADD ") || upper.startsWith("DELETE ")) {
@@ -920,22 +922,24 @@ public class DynamoDbService {
             String rest = clause.substring(eqIdx + 1).trim();
 
             // Find the value placeholder or expression
+            // IMPORTANT: Check for clause keywords FIRST, then commas
+            // This ensures we don't include REMOVE/ADD/DELETE clauses in value parts
             String valuePart;
+            int nextClause = findNextClauseKeyword(rest);
             int commaIdx = findNextComma(rest);
-            if (commaIdx >= 0) {
+
+            // If there's a clause keyword, use the earlier of comma or keyword
+            if (nextClause >= 0 && (commaIdx < 0 || nextClause < commaIdx)) {
+                valuePart = rest.substring(0, nextClause).trim();
+                rest = rest.substring(nextClause).trim();
+            } else if (commaIdx >= 0) {
                 valuePart = rest.substring(0, commaIdx).trim();
                 rest = rest.substring(commaIdx + 1).trim();
             } else {
-                // Check for next clause keyword
-                int nextClause = findNextClauseKeyword(rest);
-                if (nextClause >= 0) {
-                    valuePart = rest.substring(0, nextClause).trim();
-                    rest = rest.substring(nextClause).trim();
-                } else {
-                    valuePart = rest.trim();
-                    rest = "";
-                }
+                valuePart = rest.trim();
+                rest = "";
             }
+
 
             // Resolve the value
             if (valuePart.startsWith("if_not_exists(")) {
@@ -948,58 +952,87 @@ public class DynamoDbService {
                     String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
                     String fallbackExpr = args[1].trim();
                     JsonNode resolved;
-                    if (item.has(checkAttr)) {
+                    if (hasValueAtPath(item, checkAttr, exprAttrNames)) {
                         // attrRef exists — evaluate to its current value
-                        resolved = item.get(checkAttr);
+                        resolved = getValueAtPath(item, checkAttr, exprAttrNames);
                     } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
                         resolved = exprAttrValues.get(fallbackExpr);
                     } else {
                         // fallback is itself an attribute reference
-                        resolved = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                        resolved = getValueAtPath(item, resolveAttributeName(fallbackExpr, exprAttrNames), exprAttrNames);
                     }
                     if (resolved != null) {
-                        item.set(attrName, resolved);
+                        setValueAtPath(item, attrPath, resolved, exprAttrNames);
                     }
                 }
-            } else if (valuePart.startsWith("list_append(")) {
-                String[] args = extractFunctionArgs(valuePart);
-                if (args.length == 2) {
-                    String arg1 = args[0].trim();
-                    String arg2 = args[1].trim();
-                    JsonNode list1 = arg1.startsWith(":") && exprAttrValues != null
-                        ? exprAttrValues.get(arg1)
-                        : item.get(resolveAttributeName(arg1, exprAttrNames));
-                    JsonNode list2 = arg2.startsWith(":") && exprAttrValues != null
-                        ? exprAttrValues.get(arg2)
-                        : item.get(resolveAttributeName(arg2, exprAttrNames));
-                    if (list1 != null && list2 != null && list1.has("L") && list2.has("L")) {
-                        com.fasterxml.jackson.databind.node.ArrayNode merged =
-                            com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
-                        list1.get("L").forEach(merged::add);
-                        list2.get("L").forEach(merged::add);
-                        com.fasterxml.jackson.databind.node.ObjectNode result =
-                            com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
-                        result.set("L", merged);
-                        item.set(attrName, result);
+            } else if (valuePart.toLowerCase().startsWith("list_append(")) {
+                int open = valuePart.indexOf('(');
+                int close = valuePart.lastIndexOf(')');
+                if (open >= 0 && close > open) {
+                    String inner = valuePart.substring(open + 1, close);
+                    int commaPos = findNextComma(inner);
+                    if (commaPos >= 0) {
+                        String arg1 = inner.substring(0, commaPos).trim();
+                        String arg2 = inner.substring(commaPos + 1).trim();
+                        JsonNode list1 = evaluateSetExpr(item, arg1, exprAttrNames, exprAttrValues);
+                        JsonNode list2 = evaluateSetExpr(item, arg2, exprAttrNames, exprAttrValues);
+                        if (list1 != null && list2 != null && list1.has("L") && list2.has("L")) {
+                            com.fasterxml.jackson.databind.node.ArrayNode merged =
+                                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+                            list1.get("L").forEach(merged::add);
+                            list2.get("L").forEach(merged::add);
+                            com.fasterxml.jackson.databind.node.ObjectNode result =
+                                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                            result.set("L", merged);
+                            item.set(attrName, result);
+                        }
                     }
                 }
             } else if (valuePart.startsWith(":") && exprAttrValues != null) {
                 JsonNode value = exprAttrValues.get(valuePart);
+                LOG.debugv("applySetClause: looked up valuePart={0} in exprAttrValues, got value={1}",
+                           valuePart, value);
                 if (value != null) {
-                    item.set(attrName, value);
+                    setValueAtPath(item, attrPath, value, exprAttrNames);
+                    LOG.debugv("applySetClause: set attrPath={0} to value={1}", attrPath, value);
+                } else {
+                    LOG.debugv("applySetClause: value was null for valuePart={0}, NOT setting attribute", valuePart);
                 }
             } else if (!valuePart.isEmpty()) {
                 // Plain attribute reference: SET a = b  or  SET a = #alias
                 String refAttr = resolveAttributeName(valuePart, exprAttrNames);
-                JsonNode refValue = item.get(refAttr);
+                JsonNode refValue = getValueAtPath(item, refAttr, exprAttrNames);
                 if (refValue != null) {
-                    item.set(attrName, refValue);
+                    setValueAtPath(item, attrPath, refValue, exprAttrNames);
                 }
             }
 
             clause = rest;
         }
         return clause;
+    }
+
+    private JsonNode evaluateSetExpr(ObjectNode item, String expr,
+                                     JsonNode exprAttrNames, JsonNode exprAttrValues) {
+        if (expr.toLowerCase().startsWith("if_not_exists(")) {
+            String[] args = extractFunctionArgs(expr);
+            if (args.length == 2) {
+                String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
+                String fallbackExpr = args[1].trim();
+                if (item.has(checkAttr)) {
+                    return item.get(checkAttr);
+                } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
+                    return exprAttrValues.get(fallbackExpr);
+                } else {
+                    return item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                }
+            }
+            return null;
+        } else if (expr.startsWith(":") && exprAttrValues != null) {
+            return exprAttrValues.get(expr);
+        } else {
+            return item.get(resolveAttributeName(expr, exprAttrNames));
+        }
     }
 
     private String applyRemoveClause(ObjectNode item, String clause, JsonNode exprAttrNames) {
@@ -1147,6 +1180,95 @@ public class DynamoDbService {
             }
         }
         return nameOrPlaceholder;
+    }
+
+    /**
+     * Sets a value at a potentially nested attribute path.
+     * Supports paths like "attr", "parent.child", "#alias.nested" etc.
+     * For nested paths, navigates into the DynamoDB Map structure (M field).
+     */
+    private void setValueAtPath(ObjectNode item, String path, JsonNode value, JsonNode exprAttrNames) {
+        // Resolve any # placeholders in the path segments
+        String[] segments = path.split("\\.");
+        for (int i = 0; i < segments.length; i++) {
+            segments[i] = resolveAttributeName(segments[i].trim(), exprAttrNames);
+        }
+
+        if (segments.length == 1) {
+            // Simple top-level attribute
+            item.set(segments[0], value);
+            return;
+        }
+
+        // Navigate to the parent of the target attribute
+        ObjectNode current = item;
+        for (int i = 0; i < segments.length - 1; i++) {
+            String segment = segments[i];
+            JsonNode child = current.get(segment);
+
+            if (child == null || !child.has("M")) {
+                // Create nested map structure if it doesn't exist
+                ObjectNode newMap = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                ObjectNode wrapper = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                wrapper.set("M", newMap);
+                current.set(segment, wrapper);
+                current = newMap;
+            } else {
+                // Navigate into existing map
+                JsonNode mapContent = child.get("M");
+                if (mapContent instanceof ObjectNode) {
+                    current = (ObjectNode) mapContent;
+                } else {
+                    // Cannot navigate further, structure mismatch
+                    return;
+                }
+            }
+        }
+
+        // Set the final attribute
+        current.set(segments[segments.length - 1], value);
+    }
+
+    /**
+     * Gets a value at a potentially nested attribute path.
+     * Returns null if the path doesn't exist.
+     */
+    private JsonNode getValueAtPath(JsonNode item, String path, JsonNode exprAttrNames) {
+        // Resolve any # placeholders in the path segments
+        String[] segments = path.split("\\.");
+        for (int i = 0; i < segments.length; i++) {
+            segments[i] = resolveAttributeName(segments[i].trim(), exprAttrNames);
+        }
+
+        JsonNode current = item;
+        for (int i = 0; i < segments.length; i++) {
+            if (current == null) return null;
+
+            String segment = segments[i];
+            JsonNode child = current.get(segment);
+
+            if (child == null) return null;
+
+            if (i < segments.length - 1) {
+                // Need to navigate deeper - check for Map structure
+                if (child.has("M")) {
+                    current = child.get("M");
+                } else {
+                    return null;
+                }
+            } else {
+                // This is the final segment
+                return child;
+            }
+        }
+        return current;
+    }
+
+    /**
+     * Checks if a value exists at a potentially nested attribute path.
+     */
+    private boolean hasValueAtPath(JsonNode item, String path, JsonNode exprAttrNames) {
+        return getValueAtPath(item, path, exprAttrNames) != null;
     }
 
     private int findNextComma(String s) {

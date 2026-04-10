@@ -36,5 +36,6 @@ provider "aws" {
     secretsmanager = var.endpoint
     cognitoidp     = var.endpoint
     rds            = var.endpoint
+    cloudwatch     = var.endpoint
   }
 }
