@@ -131,7 +131,13 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ApiGatewayV2::Stage" -> provisionApiGatewayV2Stage(resource, properties, engine, region);
                 case "AWS::ApiGatewayV2::Deployment" -> provisionApiGatewayV2Deployment(resource, properties, engine, region);
                 default -> {
-                    LOG.debugv("Stubbing unsupported resource type: {0} ({1})", resourceType, logicalId);
+                    if (resourceType.startsWith("AWS::")) {
+                        LOG.warnv("Unsupported AWS resource type: {0} ({1}) — stubbing with placeholder",
+                                resourceType, logicalId);
+                    } else {
+                        LOG.warnv("Skipping custom resource type: {0} ({1}) — not supported in local emulation",
+                                resourceType, logicalId);
+                    }
                     resource.setPhysicalId(logicalId + "-" + UUID.randomUUID().toString().substring(0, 8));
                     resource.getAttributes().put("Arn", "arn:aws:stub:::" + logicalId);
                 }
